@@ -1,0 +1,5 @@
+{
+  "name": "Walmart Purchase History Analyzer",
+  "description": "Analyze your Walmart purchase history from a CSV file and match it against your current shopping list to find frequently purchased items.",
+  "requestFramePermissions": []
+}
