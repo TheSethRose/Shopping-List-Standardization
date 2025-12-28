@@ -3,7 +3,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 import { ShoppingBag, FileUp, ListChecks, Download, Database, Loader2, ExternalLink, Chrome, Play } from 'lucide-react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { analyzeShoppingList } from './services/geminiService';
+import { analyzeShoppingList } from './services/aiService';
 import { PurchaseRecord, ProductFrequency, MatchResult } from './types';
 import FileUpload from './components/FileUpload';
 import ShoppingListInput from './components/ShoppingListInput';
