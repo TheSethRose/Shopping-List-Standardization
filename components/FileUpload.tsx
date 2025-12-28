@@ -24,15 +24,17 @@ const FileUpload: React.FC<FileUploadProps> = ({ onFileSelect, isProcessing }) =
     e.preventDefault();
     setIsDragging(false);
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      processFile(files[0]);
+    const firstFile = files[0];
+    if (files.length > 0 && firstFile) {
+      processFile(firstFile);
     }
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files && files.length > 0) {
-      processFile(files[0]);
+    const firstFile = files?.[0];
+    if (firstFile) {
+      processFile(firstFile);
     }
   };
 

@@ -1,9 +1,9 @@
 
 import React, { useState, useMemo, useCallback } from 'react';
-import { ShoppingBag, FileUp, ListChecks, Download, Database, Info, Sparkles, Loader2, ExternalLink, Chrome, Search, Play, FileSearch, AlertTriangle } from 'lucide-react';
+import { ShoppingBag, FileUp, ListChecks, Download, Database, Loader2, ExternalLink, Chrome, Play } from 'lucide-react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { GoogleGenAI, Type } from "@google/genai";
+import { analyzeShoppingList } from './services/geminiService';
 import { PurchaseRecord, ProductFrequency, MatchResult } from './types';
 import FileUpload from './components/FileUpload';
 import ShoppingListInput from './components/ShoppingListInput';
@@ -33,7 +33,7 @@ const App: React.FC = () => {
   };
 
   const cleanSearchTerm = (str: string) => {
-    return str.replace(/^[\s\-\*\•\d\.]+/g, '').trim();
+    return str.replace(/^[\s\-*•\d.]+/g, '').trim();
   };
 
   const handleShoppingListChange = (val: string) => {
@@ -61,50 +61,8 @@ const App: React.FC = () => {
     setIsAnalyzed(false);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      // 1. Sanitize the list
-      const sanitizeResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `Clean up this grocery shopping list. 
-        - Remove bullet points, symbols, and numbering.
-        - Fix obvious spelling errors.
-        - One product per line.
-        - Return ONLY the cleaned list text.
-        List: ${shoppingListText}`,
-      });
-
-      const cleanedText = sanitizeResponse.text?.trim() || shoppingListText;
+      const { cleanedText, expansions } = await analyzeShoppingList(shoppingListText);
       setShoppingListText(cleanedText);
-
-      // 2. Expand Semantic Matches
-      const listItems = cleanedText.split('\n').filter(l => l.trim());
-      
-      const expansionResponse = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `You are a grocery item semantic mapper. For each item in the list, provide 5-7 alternate search keywords or specific product phrases likely found in a Walmart order history.
-        
-        CRITICAL RULES:
-        1. Keywords MUST strictly align with the user's intent. 
-        2. DO NOT suggest items that just share a word fragment (e.g., if searching for "anti gas", do NOT suggest "bubbles").
-        3. For generic items like "breakfast sandwiches", suggest actual products like "sausage biscuit", "bacon croissant", "Jimmy Dean", "breakfast muffin".
-        4. Return a JSON object where keys are the original items and values are arrays of strings.
-
-        Shopping List:
-        ${listItems.join('\n')}`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: listItems.reduce((acc: any, item) => {
-              acc[item] = { type: Type.ARRAY, items: { type: Type.STRING } };
-              return acc;
-            }, {})
-          }
-        }
-      });
-
-      const expansions = JSON.parse(expansionResponse.text || '{}');
       setExpandedKeywordsMap(expansions);
       setIsAnalyzed(true);
     } catch (error) {
@@ -115,15 +73,15 @@ const App: React.FC = () => {
     }
   };
 
-  const processParsedData = useCallback((data: any[]) => {
-    const parsed: PurchaseRecord[] = data.map((row: any) => ({
-      orderNumber: row['Order Number'] || row['orderNumber'] || '',
-      orderDate: row['Order Date'] || row['orderDate'] || '',
-      productName: row['Product Name'] || row['productName'] || '',
-      quantity: parseInt(row['Quantity'] || row['quantity'] || '0', 10),
-      price: row['Price'] || row['price'] || '',
-      deliveryStatus: row['Delivery Status'] || row['deliveryStatus'] || '',
-      productLink: row['Product Link'] || row['productLink'] || '',
+  const processParsedData = useCallback((data: Record<string, unknown>[]) => {
+    const parsed: PurchaseRecord[] = data.map((row) => ({
+      orderNumber: String(row['Order Number'] ?? row['orderNumber'] ?? ''),
+      orderDate: String(row['Order Date'] ?? row['orderDate'] ?? ''),
+      productName: String(row['Product Name'] ?? row['productName'] ?? ''),
+      quantity: parseInt(String(row['Quantity'] ?? row['quantity'] ?? '0'), 10),
+      price: String(row['Price'] ?? row['price'] ?? ''),
+      deliveryStatus: String(row['Delivery Status'] ?? row['deliveryStatus'] ?? ''),
+      productLink: String(row['Product Link'] ?? row['productLink'] ?? ''),
     })).filter(item => item.productName);
     setPurchaseHistory(parsed);
     setIsProcessing(false);
@@ -134,7 +92,7 @@ const App: React.FC = () => {
     const fileExtension = file.name.split('.').pop()?.toLowerCase();
 
     if (fileExtension === 'csv') {
-      Papa.parse(file, {
+      Papa.parse<Record<string, unknown>>(file, {
         header: true,
         skipEmptyLines: true,
         complete: (results) => processParsedData(results.data),
@@ -145,7 +103,17 @@ const App: React.FC = () => {
       reader.onload = (e) => {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-        const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        const firstSheetName = workbook.SheetNames[0];
+        if (!firstSheetName) {
+          setIsProcessing(false);
+          return;
+        }
+        const sheet = workbook.Sheets[firstSheetName];
+        if (!sheet) {
+          setIsProcessing(false);
+          return;
+        }
+        const jsonData = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet);
         processParsedData(jsonData);
       };
       reader.readAsArrayBuffer(file);
@@ -216,7 +184,8 @@ const App: React.FC = () => {
         });
 
         // Only count tokens if at least 2 tokens match or if the search is very short and matches exactly
-        if (matchedTokenCount >= 2 || (searchTokens.length === 1 && matchedTokenCount === 1 && normProduct.includes(searchTokens[0]))) {
+        const firstToken = searchTokens[0];
+        if (matchedTokenCount >= 2 || (searchTokens.length === 1 && matchedTokenCount === 1 && firstToken && normProduct.includes(firstToken))) {
           score += matchedTokenCount * 50;
         }
 
@@ -248,11 +217,15 @@ const App: React.FC = () => {
         return b.count - a.count;
       });
       
-      const matches: ProductFrequency[] = potentialMatches.map(({ score, ...rest }) => rest);
+      const matches: ProductFrequency[] = potentialMatches.map(({ score: _score, ...rest }) => rest);
       const override = selectedOverrides[term];
+      const firstMatch = matches[0];
+      if (!firstMatch) {
+        return { term, exact_name: 'No Match', url: '', count: 0, all_matches: [] };
+      }
       const winner = (override && matches.some(m => m.productName === override.productName)) 
         ? override 
-        : matches[0];
+        : firstMatch;
 
       return {
         term,
